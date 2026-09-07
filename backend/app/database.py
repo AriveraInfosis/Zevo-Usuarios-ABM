@@ -16,6 +16,8 @@ def _build_connection_string() -> str:
     else:
         parts.append(f"UID={settings.db_user}")
         parts.append(f"PWD={settings.db_password}")
+    if settings.db_trust_server_certificate:
+        parts.append("TrustServerCertificate=yes")
     return ";".join(parts)
 
 

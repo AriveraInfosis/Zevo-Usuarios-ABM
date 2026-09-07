@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Paper, Title, Table, Badge, Text } from '@mantine/core';
 import { api } from '../../api/client';
 
-const ESTADO_COLOR = { PENDIENTE: 'yellow', APROBADA: 'blue', RECHAZADA: 'red', APLICADA: 'green' };
+const ESTADO_COLOR = { PENDIENTE: 'yellow', APROBADA: 'orange', RECHAZADA: 'red', APLICADA: 'green' };
 
 export default function MisSolicitudes() {
   const [items, setItems] = useState([]);
@@ -28,6 +28,7 @@ export default function MisSolicitudes() {
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
+            <Table.Th w={70}>ID</Table.Th>
             <Table.Th>Fecha</Table.Th>
             <Table.Th>Tipo</Table.Th>
             <Table.Th>Usuario</Table.Th>
@@ -38,7 +39,7 @@ export default function MisSolicitudes() {
         <Table.Tbody>
           {items.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={5}>
+              <Table.Td colSpan={6}>
                 <Text c="dimmed" ta="center" fs="italic" py="md">
                   Todavia no enviaste ninguna solicitud.
                 </Text>
@@ -47,12 +48,22 @@ export default function MisSolicitudes() {
           )}
           {items.map((it) => (
             <Table.Tr key={it.id}>
+              <Table.Td>
+                <Text ff="monospace" fw={600}>
+                  #{it.id}
+                </Text>
+              </Table.Td>
               <Table.Td>{new Date(it.fecha_solicitud).toLocaleString()}</Table.Td>
               <Table.Td>{it.tipo_movimiento}</Table.Td>
               <Table.Td>{it.usuario}</Table.Td>
               <Table.Td>{it.alcance_bases}</Table.Td>
               <Table.Td>
                 <Badge color={ESTADO_COLOR[it.estado]}>{it.estado}</Badge>
+                {it.estado === 'APROBADA' && (
+                  <Text size="xs" c="dimmed" mt={2}>
+                    Aprobada, pendiente de aplicar por el equipo DBA.
+                  </Text>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

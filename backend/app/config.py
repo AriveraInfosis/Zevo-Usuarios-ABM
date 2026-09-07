@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     db_trusted_connection: bool = True  # True = Windows Auth (uso local); False = usa db_user/db_password
     db_user: str | None = None
     db_password: str | None = None
+    db_trust_server_certificate: bool = True  # necesario con ODBC Driver 18 contra SQL Server local (cert autofirmado)
 
     # JWT
     jwt_secret_key: str = "cambiar-esto-en-produccion"

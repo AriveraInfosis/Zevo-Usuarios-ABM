@@ -5,8 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.database import get_db, rows_to_dicts
 from app.dependencies import get_current_user, require_dba
 from app.models.auth import UsuarioActual
-from app.models.common import ROLE_CATALOG, TipoMovimiento
+from app.models.common import TipoMovimiento, roles_csv
 from app.models.solicitudes import (
+    DetalleTabla,
     ScriptGeneradoResponse,
     ScriptPorBase,
     SolicitudAplicarResponse,
@@ -31,7 +32,9 @@ def crear_solicitud(
     if body.tipo_movimiento in (TipoMovimiento.ALTA, TipoMovimiento.MODIFICACION):
         if body.accion is None:
             raise HTTPException(status_code=400, detail="Para ALTA o MODIFICACION hay que indicar la accion buscada")
-        rol_permiso = ROLE_CATALOG[body.accion]
+        # CSV: "Lectura y escritura" son dos roles (db_datawriter no incluye
+        # SELECT). El SP los splitea con STRING_SPLIT.
+        rol_permiso = roles_csv(body.accion)
 
     cursor = conn.cursor()
     try:
@@ -44,7 +47,8 @@ def crear_solicitud(
                  @alcance_bases   = ?,
                  @rol_permiso     = ?,
                  @tipo_usuario    = ?,
-                 @justificacion   = ?
+                 @justificacion   = ?,
+                 @tablas          = ?
             """,
             current_user.email,
             body.tipo_movimiento.value,
@@ -53,6 +57,8 @@ def crear_solicitud(
             rol_permiso,
             body.tipo_usuario.value,
             body.justificacion,
+            # None = permiso a nivel base, comportamiento previo.
+            ",".join(body.tablas) if body.tablas else None,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -92,7 +98,7 @@ def listar_solicitudes(
         f"""
         SELECT id, fecha_solicitud, solicitante, tipo_movimiento, usuario, tipo_usuario,
                alcance_bases, rol_permiso, justificacion, estado, aprobador,
-               fecha_resolucion, comentario, fecha_aplicacion
+               fecha_resolucion, comentario, fecha_aplicacion, log_ejecucion
         FROM   OBSERVABILIDAD.ZeusSolicitudes
         {where}
         ORDER BY fecha_solicitud DESC
@@ -123,6 +129,27 @@ def solicitudes_pendientes(
         row.setdefault("estado", "PENDIENTE")
         items.append(SolicitudItem(**row))
     return items
+
+
+# Va ANTES de /{id_solicitud}: si quedara despues, esa ruta generica se
+# come /{id}/tablas y nunca llega aca.
+@router.get("/{id_solicitud}/tablas", response_model=list[DetalleTabla])
+def validar_tablas(
+    id_solicitud: int,
+    conn=Depends(get_db),
+    _current_user: UsuarioActual = Depends(require_dba),
+):
+    """
+    Marca que tablas del pedido existen en la base de la solicitud.
+    Lista vacia = la solicitud es a nivel base, no hay detalle que validar.
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute("EXEC OBSERVABILIDAD.usp_Solicitud_ValidarTablas @id = ?", id_solicitud)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return [DetalleTabla(**row) for row in rows_to_dicts(cursor)]
 
 
 @router.get("/{id_solicitud}", response_model=SolicitudItem)
@@ -168,8 +195,15 @@ def resolver_solicitud(
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    estado = "APROBADA" if body.aprueba else "RECHAZADA"
-    return SolicitudResolverResponse(id=id_solicitud, estado=estado)
+    # El SP ahora decide el estado final internamente (RECHAZADA, o APLICADA
+    # si la ejecucion salio bien, o se queda en APROBADA con el error logueado
+    # si algo fallo) -- lo leemos de vuelta en lugar de asumirlo del booleano.
+    cursor.execute(
+        "SELECT estado, log_ejecucion FROM OBSERVABILIDAD.ZeusSolicitudes WHERE id = ?",
+        id_solicitud,
+    )
+    row = cursor.fetchone()
+    return SolicitudResolverResponse(id=id_solicitud, estado=row[0], log_ejecucion=row[1])
 
 
 @router.get("/{id_solicitud}/script", response_model=ScriptGeneradoResponse)
@@ -179,6 +213,19 @@ def generar_script(
     _current_user: UsuarioActual = Depends(require_dba),
 ):
     cursor = conn.cursor()
+
+    # El SP de generacion se planta si el detalle de tablas no esta validado.
+    # Se valida aca para que el DBA no tenga que hacer dos llamadas.
+    # Es barato e idempotente: si la solicitud es a nivel base, no hace nada.
+    try:
+        cursor.execute("EXEC OBSERVABILIDAD.usp_Solicitud_ValidarTablas @id = ?", id_solicitud)
+        while cursor.nextset():
+            pass
+    except Exception:
+        # Una falla aca no debe tapar el error real del SP de generacion,
+        # que es mas descriptivo. Se deja seguir.
+        cursor = conn.cursor()
+
     try:
         cursor.execute("EXEC OBSERVABILIDAD.usp_Solicitud_GenerarScript @id = ?", id_solicitud)
     except Exception as exc:

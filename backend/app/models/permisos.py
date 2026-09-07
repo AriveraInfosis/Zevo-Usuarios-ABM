@@ -1,3 +1,9 @@
+"""app/models/permisos.py
+
+Unico cambio respecto del original: RefrescarRequest.filtro pasa de
+'ZEUS%' a None. El resto de los modelos queda igual.
+"""
+
 from datetime import datetime
 from typing import Optional
 
@@ -35,7 +41,15 @@ class EstadoCarga(BaseModel):
 
 
 class RefrescarRequest(BaseModel):
-    filtro: str = "ZEUS%"
+    # Antes el default era 'ZEUS%', y eso dejaba fuera del inventario a
+    # cualquier usuario que no arrancara con ZEUS: los permisos otorgados
+    # por el circuito ABM no aparecian en la pantalla de permisos.
+    #
+    # Ahora el alcance lo define el SP por tipo de principal
+    # (type IN ('S','U','G','E','X') AND principal_id > 4), que ya incluye
+    # las cuentas ZEUS. Este filtro queda opcional, para acotar la carga
+    # a mano cuando haga falta.
+    filtro: Optional[str] = None
 
 
 class RefrescarResponse(BaseModel):

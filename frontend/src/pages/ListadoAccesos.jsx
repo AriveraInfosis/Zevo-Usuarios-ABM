@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Paper, Title, Group, TextInput, Button, Table, Badge, Text, Pagination } from '@mantine/core';
 import { api } from '../api/client';
 
@@ -9,6 +9,14 @@ export default function ListadoAccesos() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  /* Este listado NO lee SQL Server en vivo: muestra la foto guardada en
+     ZeusPermisos, que se arma con usp_ZeusPermisos_Cargar. Si aplicaste un
+     script recien, hasta que no se refresque no vas a verlo aca. */
+  const [estadoCarga, setEstadoCarga] = useState(null);
+  const [refrescando, setRefrescando] = useState(false);
+  const pollRef = useRef(null);
+
   const pageSize = 20;
 
   async function buscar(p = 1) {
@@ -26,16 +34,80 @@ export default function ListadoAccesos() {
     }
   }
 
+  async function traerEstado() {
+    try {
+      const data = await api.get('/permisos/estado-carga');
+      setEstadoCarga(data);
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  async function refrescar() {
+    setError('');
+    setRefrescando(true);
+
+    const antes = estadoCarga?.fecha_ultima_carga ?? null;
+
+    try {
+      await api.post('/permisos/refrescar', {});
+    } catch (err) {
+      setError(err.message);
+      setRefrescando(false);
+      return;
+    }
+
+    /* La carga corre en background y recorre todas las bases: puede tardar
+       varios minutos. Se hace poll hasta que cambie la fecha de la foto. */
+    let intentos = 0;
+    pollRef.current = setInterval(async () => {
+      intentos += 1;
+      const estado = await traerEstado();
+
+      const listo = estado?.fecha_ultima_carga && estado.fecha_ultima_carga !== antes;
+
+      if (listo || intentos > 120) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+        setRefrescando(false);
+        if (listo) {
+          buscar(1);
+        } else {
+          setError('La recarga esta tardando mas de lo normal. Volvé a consultar en unos minutos.');
+        }
+      }
+    }, 5000);
+  }
+
   useEffect(() => {
     buscar(1);
+    traerEstado();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const fechaFoto = estadoCarga?.fecha_ultima_carga
+    ? new Date(estadoCarga.fecha_ultima_carga).toLocaleString()
+    : null;
+
   return (
     <Paper withBorder p="lg">
-      <Title order={4} mb="md">
-        Listado de accesos
-      </Title>
+      <Group justify="space-between" mb="md" align="start">
+        <div>
+          <Title order={4}>Listado de accesos</Title>
+          <Text size="sm" c="dimmed">
+            {fechaFoto
+              ? `Datos al ${fechaFoto} · ${estadoCarga.filas} permisos en ${estadoCarga.bases} bases`
+              : 'Sin datos cargados todavia.'}
+          </Text>
+        </div>
+        <Button variant="light" onClick={refrescar} loading={refrescando}>
+          {refrescando ? 'Actualizando…' : 'Actualizar datos'}
+        </Button>
+      </Group>
 
       <Group mb="md" align="end">
         <TextInput
@@ -60,6 +132,12 @@ export default function ListadoAccesos() {
           Buscar
         </Button>
       </Group>
+
+      {refrescando && (
+        <Text size="sm" c="dimmed" mb="sm">
+          Recorriendo todas las bases. Podés seguir usando la pantalla; los datos se actualizan al terminar.
+        </Text>
+      )}
 
       {error && (
         <Text c="red" size="sm" mb="sm">
